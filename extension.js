@@ -1,6 +1,8 @@
 const vscode = require('vscode');
 const debounce = require('debounce');
 
+let ag = false;
+
 /**
  * @param {vscode.ExtensionContext} context
  */
@@ -9,61 +11,66 @@ function activate(context) {
 		const quickPick = vscode.window.createQuickPick();
 
 		const { spawn } = require('child_process');
-		let ag = false;
+		let cwd = vscode.workspace.workspaceFolders[0].uri.fsPath;
+		
+		if (ag !== false) {
+			ag.kill();
+		}
+		let stream = '';
+		let index = 0;
+		let setNotBusy = setTimeout(()=>{}, 500);
 
-		const updateResults = (e) => {
-			try {
-				if (ag) {
-					ag.kill();
+		const updateResults = (data) => {
+			clearTimeout(setNotBusy);
+			quickPick.busy = true;
+			stream += data.toString();
+			let endOfLine = stream.indexOf('\n');
+			let line = '';
+			while (endOfLine > -1) {
+				line = stream.substring(0, endOfLine);
+				stream = stream.substring(endOfLine + 1);
+				const match = line.match(/^([^:]+):(\d)+:(\d)+:(.*)/);
+				if (match) {
+					quickPick.items = quickPick.items.concat([{
+						id: index,
+						detail: match[1].substring(match[1].lastIndexOf('/')),
+						line: match[2],
+						column: match[3],
+						description: `${match[2]}:${match[3]}`,
+						label: `${match[4].trim()}`,
+					}]);
+				} else {
+					// console.log(line, cwd);
 				}
+				endOfLine = stream.indexOf('\n');
+				index++;
+				setNotBusy = setTimeout(()=>{
+					quickPick.busy = false;
+				}, 500);
+			}
+		}
+
+		const spawnAg = (e) => {
+			try {
 				quickPick.items = [];
-						
-				if (vscode.workspace.workspaceFolders.length) {
-					const cwd = vscode.workspace.workspaceFolders[0].uri.fsPath;
-					// not sure why the f this isn't working
-					ag = spawn('rg', ['--vimgrep', e.replace(/ /g, '\\ ')], { shell:true , cwd: cwd});
-					let stream = '';
-					let index = 0;
-					ag.stdout.on('data', (data) => {
-						quickPick.busy = true;
-						stream += data;
-						let endOfLine = stream.indexOf('\n');
-						let line = '';
-						while (endOfLine > -1) {
-							line = stream.substring(0, endOfLine);
-							stream = stream.substring(endOfLine + 1);
-							const match = line.match(/^([^:]+):(\d)+:(\d)+:(.*)/);
-							if (match) {
-								quickPick.items = quickPick.items.concat([{
-									id: index,
-									label: match[1].substring(match[1].lastIndexOf('/')),
-									line: match[2],
-									column: match[3],
-									description: `${match[2]}:${match[3]}`,
-									detail: `${match[4].trim()}`,
-								}]);
-							} else {
-								console.log(line, cwd);
-							}
-							endOfLine = stream.indexOf('\n');
-							index++;
-						}
-						quickPick.busy = false;
-					});
+				if (typeof cwd !== 'undefined') {
+					ag = spawn('rg', ['--vimgrep', `"${e.toString()}"`], { shell:true, cwd: cwd });
+					ag.stdout.on('data', updateResults);
 				}
 			} catch (e) {
 				console.log(`something went wrong.. ${e}`);
 			}
 		};
 
-		quickPick.onDidChangeValue(debounce(updateResults, 500));
+		quickPick.onDidChangeValue(debounce(spawnAg, 500));
 
 		quickPick.onDidChangeActive((e) => {
-			//console.log(e);
+			// console.log(e);
 		});
 
 		quickPick.show();
 	});
+
 	context.subscriptions.push(disposable);
 }
 exports.activate = activate;
